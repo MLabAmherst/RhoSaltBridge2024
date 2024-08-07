@@ -1,0 +1,326 @@
+#Script from Benoit Roux
+program reweight
+
+      character*10 step
+      real*8 x(200), y(200), z(200)
+      real*8 avx(200), avy(200), avz(200)
+      real*8 avrr(200)
+
+c No reweighting
+      real*8 avxNO(200), avyNO(200), avzNO(200)
+      real*8 avrrNO(200)
+
+
+      real*8 kBT, temperature
+      real*8 dv(50000), avdv
+      real*8 weight(50000)
+      real*8 totalweight
+
+      integer nres
+      character*50 fnam1, fnam2
+
+c Enter the file name for the trajectory
+      fnam1 = 'Coordinates100_aMD_PreBW1.txt'
+
+c Enter the DV file name for the DV values from aMD 
+      fnam2 = 'Weights100_aMD_PreBW1.txt'
+
+c These are the files where the results will be written
+      open(unit=10,file='weights.out',status='unknown')
+      open(unit=11,file='rmsf.out',status='unknown')
+
+c Here I assumed a temperature of 300K (just intput a different number if you need to...)
+      temperature = 300.0
+      kBT =  0.596159995*temperature/300.0
+
+c----------------------------------------------------------------------------------------
+c no need to touch the code below this...
+
+c read the DV file
+      open(unit=2,file=fnam2,status='old')
+      nfram = 0
+ 1000 read(2,*,end=2000) ijunk, dv(nfram+1)
+      nfram = nfram + 1
+      goto 1000
+ 2000 write(*,*) 'number of frames in weight file ',nfram
+
+      avdv = 0.0D0
+      do n=1,nfram
+      avdv = avdv + dv(n)
+      enddo
+      avdv = avdv/nfram
+      write(10,*) 'average DV ',avdv
+
+      totalweight = 0.0
+      do n=1,nfram
+      weight(n) = exp(-(dv(n)-avdv)/kBT)
+      totalweight = totalweight + weight(n)
+      enddo
+
+      do n=1,nfram
+      weight(n) = weight(n)/totalweight 
+      write(10,*) n,dv(n),weight(n)
+      enddo
+      
+
+c ------------------------------
+c Here we calculate the average coordinates and rms fluctuations
+c the formula for RMSF^2 = < (r-<r>)*(r-<r>) > = <r*r> - <r>*<r>
+
+      nres  = 166
+
+      do i=1,nres
+      avx(i) = 0.0
+      avy(i) = 0.0
+      avz(i) = 0.0
+      avrr(i) = 0.0
+
+      avxNO(i) = 0.0
+      avyNO(i) = 0.0
+      avzNO(i) = 0.0
+      avrrNO(i) = 0.0
+
+      enddo
+
+      open(unit=1,file=fnam1,status='old')
+
+      do n=1,nfram
+
+      read(1,*) step,(x(i),y(i),z(i), i=1,nres)
+      
+c     do i=1,nres
+c     write(*,*) i,x(i),y(i),z(i)
+c     enddo
+
+      do i=1,nres
+      avx(i)  = avx(i)  + x(i)*weight(n)
+      avy(i)  = avy(i)  + y(i)*weight(n)
+      avz(i)  = avz(i)  + z(i)*weight(n)
+      avrr(i) = avrr(i) + (x(i)*x(i)+y(i)*y(i)+z(i)*z(i))*weight(n)
+
+      avxNO(i)  = avxNO(i)  + x(i)/nfram     
+      avyNO(i)  = avyNO(i)  + y(i)/nfram     
+      avzNO(i)  = avzNO(i)  + z(i)/nfram     
+      avrrNO(i) = avrrNO(i) + (x(i)*x(i)+y(i)*y(i)+z(i)*z(i))/nfram     
+
+      enddo
+
+      enddo 
+
+      do i=1,nres
+
+      rmsf = avrr(i)-(avx(i)**2+avy(i)**2+avz(i)**2)
+      rmsf = sqrt(rmsf)
+
+      rmsfNO = avrrNO(i)-(avxNO(i)**2+avyNO(i)**2+avzNO(i)**2)
+      rmsfNO = sqrt(rmsfNO)
+
+      write(11,*) i,rmsf, rmsfNO    
+
+      enddo
+
+      flush(unit=10)
+      flush(unit=11)
+
+      end
+      
+#
+#
+#
+
+##Re-produce script in R
+
+#Part 1: Re-Write RMSF function to accept weights
+
+wrmsf <- function (xyz, grpby = NULL, average = FALSE, weights = NULL) {
+  if (is.null(dim(xyz)))
+    stop("input 'xyz' has NULL dimension")
+  if (!is.null(grpby)) {
+    if (is.pdb(grpby))
+      grpby <- paste(grpby$atom$resno, grpby$atom$chain, sep = "-")
+    if (length(grpby) != ncol(xyz)/3)
+      stop("Length of 'grpby' doesn't match 'xyz'")
+  }
+  if (!is.null(weights)) {
+    if (length(weights) != nrow(xyz))
+      stop("Length of 'weights' doesn't match 'xyz'")
+  }
+  my.sd <- function(x, na.rm = FALSE, w = NULL) {
+    if (is.matrix(x)) {
+      apply(x, 2, my.sd, na.rm = na.rm, w = w)
+    } else if (is.vector(x)) {
+      if (na.rm) {
+        x <- x[!is.na(x)]
+        w <- w[!is.na(x)]
+      }
+      if (length(x) == 0) {
+        return(NA)
+      }
+      weighted_mean <- sum(x * w) / sum(w)
+      sqrt(sum(w * (x - weighted_mean)^2) / sum(w))
+    } else if (is.data.frame(x)) {
+      sapply(x, my.sd, na.rm = na.rm, w = w)
+    } else {
+      x <- as.vector(x)
+      my.sd(x, na.rm = na.rm, w = w)
+    }
+  }
+  
+  if (is.null(weights)) {
+    fluct <- rowSums(matrix(my.sd(xyz, na.rm = TRUE), ncol = 3, byrow = TRUE)^2, na.rm = TRUE)
+  } else {
+    fluct <- rowSums(matrix(my.sd(xyz, na.rm = TRUE, w = weights), ncol = 3, byrow = TRUE)^2, na.rm = TRUE)
+  }
+  
+  if (average) {
+    if (ncol(xyz)%%3 == 0)
+      d <- ncol(xyz)/3
+    else
+      d <- ncol(xyz)
+    return(sqrt(sum(fluct)/d))
+  } else {
+    if (is.null(grpby))
+      return(sqrt(fluct))
+    else
+      return(as.vector(tapply(sqrt(fluct), as.factor(grpby), mean)))
+  }
+}
+
+#Part 2:Function to convert dV values to weights using Boltzmann method
+temperature <- 300  # Temperature in Kelvin
+convert_to_weights_boltzmann <- function(dV_values, temperature) {
+  avdv <- mean(dV_values)
+  kBT <- 0.596159995 * temperature / 300.0
+  weights <- exp(-(dV_values - avdv) / kBT)
+  weights <- weights / sum(weights)
+  return(weights)
+}
+
+#
+#
+#
+
+#Function to do weighted cross-correlation plot
+wdccm.xyz <- function(x, weights, reference = NULL, grpby = NULL, method = c("pearson", "lmi"),
+                    ncore = 1, nseg.scale = 1, ...) {
+  
+  method = match.arg(method)
+  
+  xyz <- x
+  ncore <- setup.ncore(ncore)
+  
+  if (is.null(reference)) {
+    ref = colWeightedMeans(xyz, weights) #substitute colMeans for colWeightedMeans from library(matrixStats)
+  } else {
+    ref = reference
+  }
+  dxyz <- sweep(xyz, 2, ref)
+  
+  covmat <- cov.wt(dxyz, wt = weights, method="ML") #substitute cov for cov.wt from library(moments)
+
+  if (!is.null(reference)) {
+    mxyz <- colWeightedMeans(dxyz, weights)
+    covmat <- covmat + outer(mxyz, mxyz)
+  }
+  
+  ccmat <- .cov2dccm(covmat$cov, method = method, ncore = ncore) #use covmat$cov because the output of cov.wt has more variables than cov
+  
+  if (is.null(grpby)) {
+    return(ccmat)
+  } else {
+    ##- Group by consecutive numbers in 'grpby'
+    if (ncol(xyz) != (length(grpby) * 3))
+      stop("dimension miss-match in 'xyz' and 'grpby', check lengths")
+    
+    ##- Bounds of 'grpby' numbers
+    inds <- bounds(grpby, dup.inds = TRUE)
+    nres <- nrow(inds)
+    
+    ##- Per-residue matrix
+    m <- matrix(, ncol = nres, nrow = nres)
+    ij <- pairwise(nres)
+    
+    ##- Max (absolute value) per residue
+    for (k in 1:nrow(ij)) {
+      m[ij[k, 1], ij[k, 2]] <-
+        min(ccmat[(inds[ij[k, 1], "start"]:inds[ij[k, 1], "end"]),
+                   (inds[ij[k, 2], "start"]:inds[ij[k, 2], "end"])],
+            na.rm = TRUE)
+      tmax <- max(ccmat[(inds[ij[k, 1], "start"]:inds[ij[k, 1], "end"]),
+                        (inds[ij[k, 2], "start"]:inds[ij[k, 2], "end"])],
+                  na.rm = TRUE)
+      if (tmax > abs(m[ij[k, 1], ij[k, 2]])) m[ij[k, 1], ij[k, 2]] = tmax
+    }
+    m[lower.tri(m)] = t(m)[lower.tri(m)]
+    diag(m) <- 1
+    
+    class(m) <- c("dccm", "matrix")
+    return(m)
+  }
+}
+.cov2dccm <- function(vcov, method = c("pearson", "lmi"), ncore = NULL) {
+  method = match.arg(method)
+  
+  ncore = setup.ncore(ncore)
+  if(ncore == 1) mclapply = lapply
+  
+  x <- vcov
+  ccmat = switch(method, 
+                 pearson = {
+                   n <- nrow(x)
+                   np <- pairwise(n/3)
+                   
+                   d <- sqrt(colSums(matrix(diag(x), nrow=3)))
+                   
+                   ltv <- mclapply(1:nrow(np), function(i) {
+                     i1 <- (np[i, 2] - 1) * 3 + 1
+                     i2 <- (np[i, 1] - 1) * 3 + 1
+                     sum(diag(x[i1:(i1+2), i2:(i2+2)]))/ # sum of diagnol of submatrix
+                       (d[np[i, 2]] * d[np[i, 1]])   # divided by product of standard deviations
+                   } )
+                   
+                   ccmat <- matrix(0, n/3, n/3)
+                   ccmat[lower.tri(ccmat)] <- unlist(ltv)
+                   
+                   # make full matrix
+                   ccmat <- ccmat + t(ccmat)
+                   diag(ccmat) <- 1
+                   ccmat
+                 },
+                 lmi = {
+                   # rm:r-value matrix
+                   cm <- x
+                   l <- dim(cm)[1]/3
+                   rm <- matrix(nrow=l, ncol=l)
+                   d <- 3
+                   ij <- pairwise(l)
+                   
+                   # list1: marginal-covariance 
+                   list1 <- mclapply(1:l, function(i) det(cm[(3*i-2):(3*i), (3*i-2):(3*i)]) )
+                   dm <- unlist(list1)
+                   
+                   # list2: pair-covariance
+                   list2 <- mclapply(1:nrow(ij), function(i) {
+                     x <- det(cm[c((3*ij[i,1]-2):(3*ij[i,1]),(3*ij[i,2]-2):(3*ij[i,2])), c((3*ij[i,1]-2):(3*ij[i,1]),(3*ij[i,2]-2):(3*ij[i,2]))])
+                     y <- 1/2 * (log(dm[ij[i,1]]) + log(dm[ij[i,2]]) - log(x))
+                     (1 - exp(-2 * y / d))^(1/2)
+                   }
+                   )
+                   list2 <- unlist(list2)
+                   
+                   for (k in 1:nrow(ij)) {
+                     rm[ij[k, 1], ij[k, 2]] <- list2[k]
+                   }
+                   rm[lower.tri(rm)] = t(rm)[lower.tri(rm)]
+                   diag(rm) <- 1
+                   rm
+                 } )
+  class(ccmat) = c("dccm", "matrix")
+  return(ccmat)
+}
+
+
+
+
+
+
